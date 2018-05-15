@@ -7,136 +7,240 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"gopkg.in/square/go-jose.v2"
-	"gopkg.in/square/go-jose.v2/jwt"
 )
 
-func validConfiguration(configuration Configuration, tokenRaw string) error {
+func genTestConfiguration(configuration Configuration, token string) (*JWTValidator, *http.Request) {
 	validator := NewValidator(configuration, nil)
-	headerTokenRequest, _ := http.NewRequest("", "http://localhost", nil)
-	headerValue := fmt.Sprintf("Bearer %s", tokenRaw)
-	headerTokenRequest.Header.Add("Authorization", headerValue)
 
-	_, err := validator.ValidateRequest(headerTokenRequest)
-	return err
-}
+	req, _ := http.NewRequest("", "http://localhost", nil)
+	authHeader := fmt.Sprintf("Bearer %s", token)
+	req.Header.Add("Authorization", authHeader)
 
-func TestValidatorFull(t *testing.T) {
-
-	// HS256
-	token := getTestToken(defaultAudience, defaultIssuer, time.Now().Add(24*time.Hour), jose.HS256, defaultSecret)
-	configuration := NewConfiguration(defaultSecretProvider, defaultAudience, defaultIssuer, jose.HS256)
-	err := validConfiguration(configuration, token)
-
-	if err != nil {
-		t.Error(err)
-	}
-
-	// ES384
-	jsonWebKeyES384 := genECDSAJWK(jose.ES384, "")
-	tokenES384 := getTestToken(defaultAudience, defaultIssuer, time.Now().Add(24*time.Hour), jose.ES384, jsonWebKeyES384)
-	configurationES384 := NewConfiguration(NewKeyProvider(jsonWebKeyES384.Public()), defaultAudience, defaultIssuer, jose.ES384)
-	err = validConfiguration(configurationES384, tokenES384)
-
-	if err != nil {
-		t.Error(err)
-	}
-
-	invalidToken := token + `wefwefwef`
-	err = validConfiguration(configuration, invalidToken)
-
-	if err == nil {
-		t.Error("In case of an invalid token, the validation should failed")
-	}
-}
-func TestValidatorEmpty(t *testing.T) {
-
-	configuration := NewConfiguration(defaultSecretProvider, []string{}, "", jose.HS256)
-	validToken := getTestToken([]string{}, "", time.Now().Add(24*time.Hour), jose.HS256, defaultSecret)
-
-	err := validConfiguration(configuration, validToken)
-
-	if err != nil {
-		t.Error(err)
-	}
-}
-
-func TestValidatorPartial(t *testing.T) {
-
-	configuration := NewConfiguration(defaultSecretProvider, []string{"required"}, "", jose.HS256)
-	validToken := `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWV9.TJVA95OrM7E2cBab30RMHrHDcEfxjoYZgeFONFh7HgQ`
-	err := validConfiguration(configuration, validToken)
-
-	if err == nil {
-		t.Error("In case of a wrong password, the validation should failed")
-	}
-	otherValidToken := `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkcWRxd2Rxd2Rxd2RxIiwibmFtZSI6ImRxd2Rxd2Rxd2Rxd2Rxd2QiLCJhZG1pbiI6ZmFsc2V9.-MZNG6n5KtLIG4Tsa6oi25zZK5oadmrebS-1r1Ln82c`
-	err = validConfiguration(configuration, otherValidToken)
-
-	if err == nil {
-		t.Error("In case of a wrong password, the validation should failed")
-	}
+	return validator, req
 }
 
 func invalidProvider(req *http.Request) (interface{}, error) {
-	return nil, errors.New("simple error")
-}
-func TestInvalidProvider(t *testing.T) {
-
-	provider := SecretProviderFunc(invalidProvider)
-	configuration := NewConfiguration(provider, []string{"required"}, "", jose.HS256)
-
-	token := getTestToken([]string{"required"}, "", time.Now().Add(24*time.Hour), jose.HS256, defaultSecret)
-	err := validConfiguration(configuration, token)
-
-	if err == nil {
-		t.Error("Should failed if the provider was not able to provide a valid secret")
-	}
+	return nil, errors.New("invalid secret provider")
 }
 
-func TestClaims(t *testing.T) {
-
-	configuration := NewConfiguration(defaultSecretProvider, defaultAudience, defaultIssuer, jose.HS256)
-	validator := NewValidator(configuration, nil)
-	token := getTestToken(defaultAudience, defaultIssuer, time.Now().Add(24*time.Hour), jose.HS256, defaultSecret)
-
-	headerTokenRequest, _ := http.NewRequest("", "http://localhost", nil)
-	headerValue := fmt.Sprintf("Bearer %s", token)
-
-	// Valid token
-	headerTokenRequest.Header.Add("Authorization", headerValue)
-	_, err := validator.ValidateRequest(headerTokenRequest)
-
-	if err != nil {
-		t.Errorf("The token should be considered valid: %q \n", err)
-		t.FailNow()
+func TestValidateRequestAndClaims(t *testing.T) {
+	tests := []struct {
+		name string
+		// validator config
+		configSecretProvider  SecretProvider
+		configAud             []string
+		configIss             string
+		configAlg             jose.SignatureAlgorithm
+		configNoEnforceSigAlg bool
+		expectedErrorMsg      string
+		// token attr
+		tokenAud     []string
+		tokenIss     string
+		tokenExpTime time.Time
+		tokenAlg     jose.SignatureAlgorithm
+		tokenSecret  interface{}
+	}{
+		{
+			name:                 "pass - token HS256",
+			configSecretProvider: defaultSecretProvider,
+			configAud:            defaultAudience,
+			configIss:            defaultIssuer,
+			configAlg:            jose.HS256,
+			tokenAud:             defaultAudience,
+			tokenIss:             defaultIssuer,
+			tokenExpTime:         time.Now().Add(24 * time.Hour),
+			tokenAlg:             jose.HS256,
+			tokenSecret:          defaultSecret,
+			expectedErrorMsg:     "",
+		},
+		{
+			name:                 "pass - token ES384",
+			configSecretProvider: defaultSecretProviderES384,
+			configAud:            defaultAudience,
+			configIss:            defaultIssuer,
+			configAlg:            jose.ES384,
+			tokenAud:             defaultAudience,
+			tokenIss:             defaultIssuer,
+			tokenExpTime:         time.Now().Add(24 * time.Hour),
+			tokenAlg:             jose.ES384,
+			tokenSecret:          defaultSecretES384,
+			expectedErrorMsg:     "",
+		},
+		{
+			name:                 "pass - token, config empty iss, aud",
+			configSecretProvider: defaultSecretProvider,
+			configAud:            emptyAudience,
+			configIss:            emptyIssuer,
+			configAlg:            jose.HS256,
+			tokenAud:             emptyAudience,
+			tokenIss:             emptyIssuer,
+			tokenExpTime:         time.Now().Add(24 * time.Hour),
+			tokenAlg:             jose.HS256,
+			tokenSecret:          defaultSecret,
+			expectedErrorMsg:     "",
+		},
+		{
+			name:                  "pass - token HS256 config no enforce sig alg",
+			configSecretProvider:  defaultSecretProvider,
+			configAud:             defaultAudience,
+			configIss:             defaultIssuer,
+			configNoEnforceSigAlg: true,
+			tokenAud:              defaultAudience,
+			tokenIss:              defaultIssuer,
+			tokenExpTime:          time.Now().Add(24 * time.Hour),
+			tokenAlg:              jose.HS256,
+			tokenSecret:           defaultSecret,
+			expectedErrorMsg:      "",
+		},
+		{
+			name:                  "pass - token ES384 config no enforce sig alg",
+			configSecretProvider:  defaultSecretProviderES384,
+			configAud:             defaultAudience,
+			configIss:             defaultIssuer,
+			configNoEnforceSigAlg: true,
+			tokenAud:              defaultAudience,
+			tokenIss:              defaultIssuer,
+			tokenExpTime:          time.Now().Add(24 * time.Hour),
+			tokenAlg:              jose.ES384,
+			tokenSecret:           defaultSecretES384,
+			expectedErrorMsg:      "",
+		},
+		{
+			name:                  "fail - config no enforce sig alg but invalid token alg",
+			configSecretProvider:  defaultSecretProviderES384,
+			configAud:             defaultAudience,
+			configIss:             defaultIssuer,
+			configNoEnforceSigAlg: true,
+			tokenAud:              defaultAudience,
+			tokenIss:              defaultIssuer,
+			tokenExpTime:          time.Now().Add(24 * time.Hour),
+			tokenAlg:              jose.RS256,
+			tokenSecret:           defaultSecretRS256,
+			expectedErrorMsg:      "error in cryptographic primitive",
+		},
+		{
+			name:                 "fail - invalid config secret provider",
+			configSecretProvider: SecretProviderFunc(invalidProvider),
+			configAud:            defaultAudience,
+			configIss:            defaultIssuer,
+			configAlg:            jose.HS256,
+			tokenAud:             defaultAudience,
+			tokenIss:             defaultIssuer,
+			tokenExpTime:         time.Now().Add(24 * time.Hour),
+			tokenAlg:             jose.HS256,
+			tokenSecret:          defaultSecret,
+			expectedErrorMsg:     "invalid secret provider",
+		},
+		{
+			name:                 "fail - invalid token aud",
+			configSecretProvider: defaultSecretProvider,
+			configAud:            defaultAudience,
+			configIss:            defaultIssuer,
+			configAlg:            jose.HS256,
+			tokenAud:             []string{"invalid aud"},
+			tokenIss:             defaultIssuer,
+			tokenExpTime:         time.Now().Add(24 * time.Hour),
+			tokenAlg:             jose.HS256,
+			tokenSecret:          defaultSecret,
+			expectedErrorMsg:     "invalid audience claim (aud)",
+		},
+		{
+			name:                 "fail - invalid token iss",
+			configSecretProvider: defaultSecretProvider,
+			configAud:            defaultAudience,
+			configIss:            defaultIssuer,
+			configAlg:            jose.HS256,
+			tokenAud:             defaultAudience,
+			tokenIss:             "invalid iss",
+			tokenExpTime:         time.Now().Add(24 * time.Hour),
+			tokenAlg:             jose.HS256,
+			tokenSecret:          defaultSecret,
+			expectedErrorMsg:     "invalid issuer claim (iss)",
+		},
+		{
+			name:                 "fail - invalid token expiry",
+			configSecretProvider: defaultSecretProvider,
+			configAud:            defaultAudience,
+			configIss:            defaultIssuer,
+			configAlg:            jose.HS256,
+			tokenAud:             defaultAudience,
+			tokenIss:             defaultIssuer,
+			tokenExpTime:         time.Now().Add(-24 * time.Hour),
+			tokenAlg:             jose.HS256,
+			tokenSecret:          defaultSecret,
+			expectedErrorMsg:     "token is expired (exp)",
+		},
+		{
+			name:                 "fail - invalid token alg",
+			configSecretProvider: defaultSecretProvider,
+			configAud:            defaultAudience,
+			configIss:            defaultIssuer,
+			configAlg:            jose.HS256,
+			tokenAud:             defaultAudience,
+			tokenIss:             defaultIssuer,
+			tokenExpTime:         time.Now().Add(24 * time.Hour),
+			tokenAlg:             jose.HS384,
+			tokenSecret:          defaultSecret,
+			expectedErrorMsg:     "Algorithm is invalid",
+		},
+		{
+			name:                 "fail - invalid token secret",
+			configSecretProvider: defaultSecretProvider,
+			configAud:            defaultAudience,
+			configIss:            defaultIssuer,
+			configAlg:            jose.HS256,
+			tokenAud:             defaultAudience,
+			tokenIss:             defaultIssuer,
+			tokenExpTime:         time.Now().Add(24 * time.Hour),
+			tokenAlg:             jose.HS256,
+			tokenSecret:          []byte("invalid secret"),
+			expectedErrorMsg:     "error in cryptographic primitive",
+		},
 	}
 
-	claims := map[string]interface{}{}
-	tok, _ := jwt.ParseSigned(string(token))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			token := getTestToken(
+				test.tokenAud,
+				test.tokenIss,
+				test.tokenExpTime,
+				test.tokenAlg,
+				test.tokenSecret,
+			)
+			var configuration Configuration
+			if test.configNoEnforceSigAlg == true {
+				configuration = NewConfigurationNoEnforceSigAlg(
+					test.configSecretProvider,
+					test.configAud,
+					test.configIss,
+				)
+			} else {
+				configuration = NewConfiguration(
+					test.configSecretProvider,
+					test.configAud,
+					test.configIss,
+					test.configAlg,
+				)
+			}
 
-	err = validator.Claims(headerTokenRequest, tok, &claims)
+			validator, req := genTestConfiguration(configuration, token)
 
-	if err != nil {
-		t.Errorf("Claims should be valid in case of valid configuration: %q \n", err)
-	}
-}
+			jwt, err := validator.ValidateRequest(req)
 
-func TestTokenAlgValidity(t *testing.T) {
-	token := getTestToken([]string{"required"}, "", time.Now().Add(24*time.Hour), jose.HS384, defaultSecret)
-	configuration := NewConfiguration(defaultSecretProvider, defaultAudience, defaultIssuer, jose.HS256)
-	err := validConfiguration(configuration, token)
+			if test.expectedErrorMsg != "" {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), test.expectedErrorMsg)
 
-	if err == nil {
-		t.Error("Should failed if the token was not of a valid type")
-	}
-}
+			} else {
+				assert.NoError(t, err)
 
-func TestTokenTimeValidity(t *testing.T) {
-	expiredToken := getTestToken(defaultAudience, defaultIssuer, time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC), jose.HS256, defaultSecret)
-	configuration := NewConfiguration(defaultSecretProvider, defaultAudience, defaultIssuer, jose.HS256)
-	err := validConfiguration(configuration, expiredToken)
-	if err == nil {
-		t.Errorf("Message should be considered as outdated")
+				// claims should be unmarshalled successfully
+				claims := map[string]interface{}{}
+				err = validator.Claims(req, jwt, &claims)
+				assert.NoError(t, err)
+			}
+		})
 	}
 }

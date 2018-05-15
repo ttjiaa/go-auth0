@@ -40,17 +40,28 @@ var (
 // all the information about the
 // Auth0 service.
 type Configuration struct {
-	secretProvider SecretProvider
-	expectedClaims jwt.Expected
-	signIn         jose.SignatureAlgorithm
+	secretProvider  SecretProvider
+	expectedClaims  jwt.Expected
+	signIn          jose.SignatureAlgorithm
+	noEnforceSigAlg bool
 }
 
 // NewConfiguration creates a configuration for server
 func NewConfiguration(provider SecretProvider, audience []string, issuer string, method jose.SignatureAlgorithm) Configuration {
 	return Configuration{
-		secretProvider: provider,
-		expectedClaims: jwt.Expected{Issuer: issuer, Audience: audience},
-		signIn:         method,
+		secretProvider:  provider,
+		expectedClaims:  jwt.Expected{Issuer: issuer, Audience: audience},
+		signIn:          method,
+		noEnforceSigAlg: false,
+	}
+}
+
+// NewConfigurationNoEnforceSigAlg creates a configuration for server with no enforcement for token sig alg type
+func NewConfigurationNoEnforceSigAlg(provider SecretProvider, audience []string, issuer string) Configuration {
+	return Configuration{
+		secretProvider:  provider,
+		expectedClaims:  jwt.Expected{Issuer: issuer, Audience: audience},
+		noEnforceSigAlg: true,
 	}
 }
 
@@ -82,9 +93,11 @@ func (v *JWTValidator) ValidateRequest(r *http.Request) (*jwt.JSONWebToken, erro
 		return nil, ErrNoJWTHeaders
 	}
 
-	header := token.Headers[0]
-	if header.Algorithm != string(v.config.signIn) {
-		return nil, ErrInvalidAlgorithm
+	if v.config.noEnforceSigAlg != true {
+		header := token.Headers[0]
+		if header.Algorithm != string(v.config.signIn) {
+			return nil, ErrInvalidAlgorithm
+		}
 	}
 
 	claims := jwt.Claims{}
